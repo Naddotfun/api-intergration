@@ -1,6 +1,8 @@
-# Nad.fun Integration V2
+# Nad.fun API Integration Guide
 
-이 문서는 현재 `api-server` 라우터/타입 기준의 외부 연동 문서입니다. 컨트랙트 생성 플로우는 `nadfun-contract-v2`의 `INadFunRouter` / `NadFunRouter` 기준으로 작성했습니다.
+This document describes the current Nad.fun API server integration surface and the Nad.fun v2 token creation contract flow.
+
+The API sections are based on the current `api-server` routes and serialized response types. The contract sections are based on `nadfun-contract-v2`, especially `INadFunRouter` and `NadFunRouter`.
 
 ---
 
@@ -11,24 +13,24 @@
 | Mainnet | `https://api.nad.fun` |
 | Testnet | `https://dev-api.nad.fun` |
 
-모든 예시는 `{BASE_URL}`을 위 URL 중 하나로 치환해서 사용합니다.
+All examples use `{BASE_URL}` as a placeholder for one of the URLs above.
 
 ---
 
-## 공통 규칙
+## Common Rules
 
-### 주소 형식
+### Address Format
 
-- 모든 토큰/계정 주소는 EVM 주소 형식입니다.
-- `0x` prefix 포함 42자 문자열이어야 합니다.
-- 유효하지 않은 주소는 대부분 `400`과 `{"error":"Invalid token ID"}` 또는 유사 메시지를 반환합니다.
+- Token and account addresses use EVM address format.
+- Addresses must be 42-character strings including the `0x` prefix.
+- Invalid token addresses usually return `400` with an error such as `{"error":"Invalid token ID"}`.
 
-### 숫자 형식
+### Numeric Values
 
-- 가격, 수량, 볼륨, 공급량처럼 정밀도가 필요한 값은 문자열로 반환됩니다.
-- 클라이언트에서는 `number` 대신 decimal/bigint 라이브러리 사용을 권장합니다.
+- Prices, amounts, volumes, reserves, and supplies are returned as strings to preserve decimal precision.
+- Integrators should parse these fields with decimal or bigint libraries, not JavaScript `number` for financial calculations.
 
-### 에러 형식
+### Error Format
 
 ```json
 {
@@ -36,44 +38,198 @@
 }
 ```
 
-일부 내부 오류는 상세 사유 대신 `Internal server error`로 마스킹됩니다.
+Some internal errors are intentionally masked as `Internal server error`.
 
-### API Key 및 Rate Limit
+### API Key and Rate Limit
 
-외부 Origin 요청은 API Key 없이도 가능하지만 Rate Limit이 낮습니다.
+External requests can be sent without an API key, but the rate limit is lower.
 
-| 요청 출처 | `X-API-Key` | Rate Limit |
+| Request origin | `X-API-Key` | Rate limit |
 |---|---:|---:|
-| `nad.fun`, `nadapp.net`, `*.nad.fun`, `*.symphony.io`, `localhost:*` | 불필요 | 없음 |
-| 외부 Origin / Origin 없음 | 없음 | `10 req/min` |
-| 외부 Origin / Origin 없음 | 있음 | `100 req/min` |
+| `nad.fun`, `nadapp.net`, `*.nad.fun`, `*.symphony.io`, `localhost:*` | Not required | None |
+| External origin or no Origin header | Not provided | `10 req/min` |
+| External origin or no Origin header | Provided | `100 req/min` |
 
 ```http
 X-API-Key: nadfun_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-Rate limit 응답에는 다음 헤더가 포함될 수 있습니다.
+Rate limited responses may include these headers:
 
 | Header | Description |
 |---|---|
-| `X-RateLimit-Limit` | 분당 허용 요청 수 |
-| `X-RateLimit-Remaining` | 남은 요청 수 |
-| `X-RateLimit-Window` | 현재 `1m` |
-| `X-RateLimit-Upgrade` | API Key 미사용 시 안내 |
+| `X-RateLimit-Limit` | Allowed requests per minute |
+| `X-RateLimit-Remaining` | Remaining requests in the current window |
+| `X-RateLimit-Window` | Currently `1m` |
+| `X-RateLimit-Upgrade` | Present when no API key is used |
 
 ---
 
-## 전체 생성 플로우
+## Authentication and API Key Issuance
 
-1. `POST /metadata/image`로 토큰 이미지를 업로드합니다.
-2. 반환된 `image_uri`로 `POST /metadata/metadata`를 호출해 `metadata_uri`를 받습니다.
-3. `POST /token/salt`로 vanity 주소용 `salt`와 예상 토큰 주소를 받습니다.
-4. v2 컨트랙트 `NadFunRouter.create()` 또는 `NadFunRouter.createWithNative()`를 호출합니다.
-5. 생성 트랜잭션이 인덱싱된 뒤 API에서 `/token/:token`, `/token/metadata/:token_id`, `/trade/*` 조회가 가능합니다.
+API keys are issued from an authenticated wallet session. The full flow is:
+
+1. Request a nonce from `POST /auth/nonce`.
+2. Sign the returned nonce string with the wallet.
+3. Create a session with `POST /auth/session`.
+4. Use the session cookie to create an API key with `POST /api-key`.
+5. Send the issued key in `X-API-Key` on API requests.
+
+The full API key is returned only once at creation time. Store it securely.
+
+### 1. Request Auth Nonce
+
+#### `POST /auth/nonce`
+
+```json
+{
+  "address": "0x1234567890abcdef1234567890abcdef12345678"
+}
+```
+
+Success `200`:
+
+```json
+{
+  "nonce": "Account:\n\n0x1234567890abcdef1234567890abcdef12345678\n\nURI: https://testnet.nad.fun\n\nVersion: 1\n\nChain ID: 10143\n\nNonce: 550e8400-e29b-41d4-a716-446655440000\n\nIssued At: 2026-05-08T00:00:00Z"
+}
+```
+
+Sign the exact `nonce` string returned by the server. Do not edit or normalize whitespace.
+
+### 2. Create Session
+
+#### `POST /auth/session`
+
+```json
+{
+  "signature": "0x1234567890abcdef...",
+  "nonce": "Account:\n\n0x1234567890abcdef1234567890abcdef12345678\n\nURI: https://testnet.nad.fun\n\nVersion: 1\n\nChain ID: 10143\n\nNonce: 550e8400-e29b-41d4-a716-446655440000\n\nIssued At: 2026-05-08T00:00:00Z",
+  "chain_id": 10143,
+  "wallet_address": null
+}
+```
+
+| Field | Required | Description |
+|---|---:|---|
+| `signature` | Yes | EVM signature of the exact nonce string |
+| `nonce` | Yes | The full nonce message returned by `/auth/nonce` |
+| `chain_id` | Yes | Must match the target API environment chain ID |
+| `wallet_address` | No | Optional smart-wallet address field |
+
+Success `200` sets an HTTP-only session cookie and returns account information:
+
+```http
+Set-Cookie: <SESSION_COOKIE_NAME>=<SESSION_ID>; HttpOnly; Secure; Path=/; SameSite=None; Max-Age=86400
+```
+
+```json
+{
+  "account_info": {
+    "account_id": "0x1234567890abcdef1234567890abcdef12345678",
+    "nickname": "0x1234...5678",
+    "bio": "",
+    "image_uri": "https://storage.nadapp.net/default/1.png"
+  }
+}
+```
+
+### 3. Create API Key
+
+#### `POST /api-key`
+
+Requires the session cookie created by `/auth/session`.
+
+```json
+{
+  "name": "My Integration",
+  "description": "External service integration",
+  "expires_in_days": 365
+}
+```
+
+| Field | Required | Description |
+|---|---:|---|
+| `name` | Yes | Human-readable API key name |
+| `description` | No | Optional description |
+| `expires_in_days` | No | Expiration in days. Omit or send `null` for no expiration |
+
+Success `200`:
+
+```json
+{
+  "id": 7185139933124608001,
+  "api_key": "nadfun_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "key_prefix": "nadfun_xxxxx",
+  "name": "My Integration"
+}
+```
+
+Notes:
+
+- API keys use the format `nadfun_` plus 32 alphanumeric characters.
+- Each wallet account can create up to 5 API keys.
+- The `owner_address` is taken from the authenticated session. Clients do not need to send it.
+- The full `api_key` is not returned by list endpoints. It is only returned by this creation response.
+
+### 4. Manage API Keys
+
+#### `GET /api-key`
+
+Lists API keys owned by the authenticated session account.
+
+```json
+{
+  "api_keys": [
+    {
+      "id": 7185139933124608001,
+      "key_prefix": "nadfun_xxxxx",
+      "name": "My Integration",
+      "description": "External service integration",
+      "owner_address": "0x1234567890abcdef1234567890abcdef12345678",
+      "is_active": true,
+      "created_at": "2026-05-08T00:00:00Z",
+      "expires_at": "2027-05-08T00:00:00Z",
+      "last_used_at": null,
+      "request_count": 0
+    }
+  ],
+  "total": 1
+}
+```
+
+#### `DELETE /api-key/:id`
+
+Deletes an API key owned by the authenticated session account.
+
+```json
+{
+  "success": true
+}
+```
+
+### 5. Use API Key
+
+```bash
+curl "{BASE_URL}/trade/market/0x1234567890abcdef1234567890abcdef12345678" \
+  -H "X-API-Key: nadfun_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+When the key is invalid, expired, inactive, or malformed, the API returns `401`.
 
 ---
 
-## 공통 응답 타입
+## Token Creation Flow
+
+1. Upload the token image with `POST /metadata/image`.
+2. Use the returned `image_uri` to upload token metadata with `POST /metadata/metadata`.
+3. Use the returned `metadata_uri` to mine a vanity salt with `POST /token/salt`.
+4. Call the v2 contract `NadFunRouter.create()` or `NadFunRouter.createWithNative()`.
+5. After the creation transaction is indexed, query the token through `/token/:token`, `/token/metadata/:token_id`, and `/trade/*`.
+
+---
+
+## Common Response Types
 
 ### `AccountInfo`
 
@@ -88,7 +244,7 @@ interface AccountInfo {
 
 ### `TokenInfo`
 
-현재 API 응답의 `token_info` 기준입니다.
+This is the current API shape for `token_info`.
 
 ```ts
 interface TokenInfo {
@@ -109,28 +265,28 @@ interface TokenInfo {
 }
 ```
 
-`creator.nickname` / `creator.image_uri`는 X 연동 정보가 있으면 X 정보를 우선 사용합니다.
+If the creator has connected X, `creator.nickname` and `creator.image_uri` prefer the X handle and X image.
 
 | Field | Type | Description |
 |---|---|---|
-| `token_id` | string | 토큰 컨트랙트 주소 |
-| `name` | string | 토큰 이름 |
-| `symbol` | string | 토큰 심볼 |
-| `image_uri` | string | 토큰 이미지 URL |
-| `description` | string \| null | 토큰 설명 |
-| `is_graduated` | boolean | bonding curve에서 DEX로 졸업했는지 여부 |
-| `is_nsfw` | boolean | NSFW 이미지/메타데이터 여부 |
-| `twitter` | string \| null | X 링크 |
-| `telegram` | string \| null | Telegram 링크 |
-| `website` | string \| null | 웹사이트 링크 |
-| `created_at` | number | 생성 Unix timestamp, seconds |
-| `creator` | AccountInfo | creator 계정 정보 |
-| `is_cto` | boolean | CTO 상태 여부 |
-| `hackathon_info` | HackathonInfo \| null | 해커톤 등록 정보. `/token/:token`에서 포함될 수 있음 |
+| `token_id` | string | Token contract address |
+| `name` | string | Token name |
+| `symbol` | string | Token symbol |
+| `image_uri` | string | Token image URL |
+| `description` | string or null | Token description |
+| `is_graduated` | boolean | Whether the token has graduated from bonding curve to DEX |
+| `is_nsfw` | boolean | Whether the token image or metadata is marked NSFW |
+| `twitter` | string or null | X URL |
+| `telegram` | string or null | Telegram URL |
+| `website` | string or null | Website URL |
+| `created_at` | number | Creation Unix timestamp in seconds |
+| `creator` | AccountInfo | Creator account information |
+| `is_cto` | boolean | CTO status flag |
+| `hackathon_info` | HackathonInfo or null | Hackathon registration info, when available on `/token/:token` |
 
 ### `MarketInfo`
 
-현재 API 응답의 `market_info` 기준입니다.
+This is the current API shape for `market_info`.
 
 ```ts
 type MarketType = "CURVE" | "DEX";
@@ -157,38 +313,38 @@ interface MarketInfo {
 
 | Field | Type | Description |
 |---|---|---|
-| `market_type` | `"CURVE"` \| `"DEX"` | 현재 마켓 타입 |
-| `token_id` | string | 토큰 컨트랙트 주소 |
-| `market_id` | string | curve 또는 DEX pool 주소 |
-| `reserve_native` | string | 현재 API 호환 필드. quote/native 리저브 |
-| `reserve_token` | string | 프로젝트 토큰 리저브 |
-| `token_price` | string | 토큰 USD 가격 |
-| `native_price` | string | 현재 API 호환 필드. quote/native USD 가격 |
-| `price` | string | quote/native 기준 토큰 가격 |
-| `price_usd` | string | USD 기준 토큰 가격 |
-| `price_native` | string | `price`와 동일한 호환 필드 |
-| `total_supply` | string | 총 공급량 |
-| `volume` | string | 누적 거래량 |
-| `ath_price` | string | ATH 가격. 현재 API에서는 USD 기준 값 |
-| `ath_price_usd` | string | ATH USD 가격 |
-| `ath_price_native` | string | ATH quote/native 가격 |
-| `holder_count` | number | 홀더 수 |
+| `market_type` | `"CURVE"` or `"DEX"` | Current market type |
+| `token_id` | string | Token contract address |
+| `market_id` | string | Curve or DEX pool address |
+| `reserve_native` | string | Backward-compatible quote/native reserve field |
+| `reserve_token` | string | Project token reserve |
+| `token_price` | string | Token price in USD |
+| `native_price` | string | Backward-compatible quote/native USD price field |
+| `price` | string | Token price in quote/native asset |
+| `price_usd` | string | Token price in USD |
+| `price_native` | string | Backward-compatible alias for `price` |
+| `total_supply` | string | Total token supply |
+| `volume` | string | Cumulative trading volume |
+| `ath_price` | string | Current API ATH field. It is USD-denominated in current queries |
+| `ath_price_usd` | string | All-time high price in USD |
+| `ath_price_native` | string | All-time high price in quote/native asset |
+| `holder_count` | number | Token holder count |
 
-주의: v2 컨트랙트는 multi quote asset을 지원하지만, 현재 이 API 타입은 `quote_id`, `reserve_quote`, `quote_price`, `version`을 직렬화하지 않습니다. 현재 코드 기준 `market_type`도 `CURVE` 또는 `DEX`로 반환됩니다.
+Note: Nad.fun v2 contracts support multiple quote assets. The current API response type does not serialize `quote_id`, `reserve_quote`, `quote_price`, or `version`. The current API also serializes `market_type` as `CURVE` or `DEX`.
 
 ---
 
-## 1. 토큰 기본 정보 조회
+## 1. Get Token Info
 
 ### `GET /token/:token`
 
-토큰의 기본 메타데이터와 creator 정보를 조회합니다.
+Returns token metadata and creator information.
 
 #### Path Parameters
 
 | Name | Type | Required | Description |
 |---|---|---:|---|
-| `token` | string | Yes | 토큰 컨트랙트 주소 |
+| `token` | string | Yes | Token contract address |
 
 #### Success `200`
 
@@ -220,17 +376,17 @@ interface MarketInfo {
 
 ---
 
-## 2. 토큰 메타데이터 + 마켓 조회
+## 2. Get Token Metadata and Market
 
 ### `GET /token/metadata/:token_id`
 
-토큰 기본 정보와 현재 마켓 정보를 함께 조회합니다.
+Returns token metadata and current market data in one response.
 
 #### Path Parameters
 
 | Name | Type | Required | Description |
 |---|---|---:|---|
-| `token_id` | string | Yes | 토큰 컨트랙트 주소 |
+| `token_id` | string | Yes | Token contract address |
 
 #### Success `200`
 
@@ -280,17 +436,17 @@ interface MarketInfo {
 
 ---
 
-## 3. 마켓 데이터 조회
+## 3. Get Market Data
 
 ### `GET /trade/market/:token_id`
 
-현재 마켓 상태, 가격, 리저브, 볼륨, 홀더 수를 조회합니다.
+Returns current market state, price, reserves, volume, and holder count.
 
 #### Path Parameters
 
 | Name | Type | Required | Description |
 |---|---|---:|---|
-| `token_id` | string | Yes | 토큰 컨트랙트 주소 |
+| `token_id` | string | Yes | Token contract address |
 
 #### Success `200`
 
@@ -319,36 +475,36 @@ interface MarketInfo {
 
 ---
 
-## 4. 차트 데이터 조회
+## 4. Get Chart Data
 
 ### `GET /trade/chart/:token_id`
 
-OHLCV 캔들 데이터를 조회합니다.
+Returns OHLCV candlestick data.
 
 #### Path Parameters
 
 | Name | Type | Required | Description |
 |---|---|---:|---|
-| `token_id` | string | Yes | 토큰 컨트랙트 주소 |
+| `token_id` | string | Yes | Token contract address |
 
 #### Query Parameters
 
 | Name | Type | Required | Default | Description |
 |---|---|---:|---|---|
 | `resolution` | string | No | `5` | `1`, `5`, `15`, `30`, `60`, `1H`, `240`, `4H`, `D`, `1D`, `W`, `1W`, `M`, `1M` |
-| `from` | integer | Yes | - | 시작 Unix timestamp. 현재 구현에서는 유효성 검사용이며 조회 조건에는 `to`/`countback`이 사용됩니다. |
-| `to` | integer | Yes | - | 종료 Unix timestamp. `time_stamp < to` 조건 |
-| `countback` | integer | No | `500` | 반환할 최대 캔들 수. `1..3000` |
+| `from` | integer | Yes | - | Start Unix timestamp. Current implementation validates it but uses `to` and `countback` for the query |
+| `to` | integer | Yes | - | End Unix timestamp. Query condition is `time_stamp < to` |
+| `countback` | integer | No | `500` | Maximum candles to return. Range: `1..3000` |
 | `chart_type` | string | No | `price` | `price`, `price_usd`, `market_cap`, `market_cap_usd` |
 
-#### Chart Type
+#### Chart Types
 
 | Value | Description |
 |---|---|
-| `price` | quote token 기준 토큰 가격 |
-| `price_usd` | USD 기준 토큰 가격 |
-| `market_cap` | quote token 기준 시가총액 |
-| `market_cap_usd` | USD 기준 시가총액 |
+| `price` | Token price in quote/native asset |
+| `price_usd` | Token price in USD |
+| `market_cap` | Market cap in quote/native asset |
+| `market_cap_usd` | Market cap in USD |
 
 #### Success `200`
 
@@ -382,23 +538,23 @@ OHLCV 캔들 데이터를 조회합니다.
 
 ---
 
-## 5. 거래 지표 조회
+## 5. Get Trading Metrics
 
 ### `GET /trade/metrics/:token_id`
 
-여러 timeframe의 거래 수, 거래량, maker 수, 가격 변동률을 한 번에 조회합니다.
+Returns transaction counts, volume, maker counts, and price-change percentage for multiple timeframes.
 
 #### Path Parameters
 
 | Name | Type | Required | Description |
 |---|---|---:|---|
-| `token_id` | string | Yes | 토큰 컨트랙트 주소 |
+| `token_id` | string | Yes | Token contract address |
 
 #### Query Parameters
 
 | Name | Type | Required | Description |
 |---|---|---:|---|
-| `timeframes` | string | Yes | comma-separated. `1`, `5`, `15`, `30`, `60`, `240`, `1D` |
+| `timeframes` | string | Yes | Comma-separated values. Supported: `1`, `5`, `15`, `30`, `60`, `240`, `1D` |
 
 #### Success `200`
 
@@ -436,22 +592,22 @@ curl "{BASE_URL}/trade/metrics/0x1234567890abcdef1234567890abcdef12345678?timefr
 
 ---
 
-## 6. Swap History 조회
+## 6. Get Swap History
 
 ### `GET /trade/swap-history/:token_id`
 
-토큰 거래 내역을 페이지네이션으로 조회합니다.
+Returns paginated token swap history.
 
 #### Query Parameters
 
 | Name | Type | Required | Default | Description |
 |---|---|---:|---|---|
-| `page` | integer | No | `1` | 최소 `1` |
-| `limit` | integer | No | `10` | `1..100` |
-| `direction` | string | No | `DESC` | `ASC` 또는 `DESC` |
+| `page` | integer | No | `1` | Minimum `1` |
+| `limit` | integer | No | `10` | Range: `1..100` |
+| `direction` | string | No | `DESC` | `ASC` or `DESC` |
 | `volume_ranges` | string | No | - | `small`, `medium`, `large`, comma-separated |
-| `account_id` | string | No | - | 특정 계정 거래 필터 |
-| `trade_type` | string | No | `ALL` | `BUY`, `SELL`, `ALL` |
+| `account_id` | string | No | - | Filter swaps by account |
+| `trade_type` | string | No | `ALL` | `BUY`, `SELL`, or `ALL` |
 
 #### Success `200`
 
@@ -482,19 +638,19 @@ curl "{BASE_URL}/trade/metrics/0x1234567890abcdef1234567890abcdef12345678?timefr
 
 ---
 
-## 7. Holder 조회
+## 7. Get Holders
 
 ### `GET /trade/holder/:token_id`
 
-토큰 홀더 목록을 조회합니다.
+Returns a paginated token holder list.
 
 #### Query Parameters
 
 | Name | Type | Required | Default | Description |
 |---|---|---:|---|---|
-| `page` | integer | No | `1` | 최소 `1` |
-| `limit` | integer | No | `10` | `1..100` |
-| `direction` | string | No | `DESC` | 현재 PaginationParams에 포함 |
+| `page` | integer | No | `1` | Minimum `1` |
+| `limit` | integer | No | `10` | Range: `1..100` |
+| `direction` | string | No | `DESC` | Included in the shared pagination params |
 
 #### Success `200`
 
@@ -522,19 +678,19 @@ curl "{BASE_URL}/trade/metrics/0x1234567890abcdef1234567890abcdef12345678?timefr
 
 ---
 
-## 8. 이미지 업로드
+## 8. Upload Image
 
 ### `POST /metadata/image`
 
-토큰 이미지를 업로드하고 NSFW 여부를 검사합니다.
+Uploads a token image and checks whether it is NSFW.
 
 #### Request
 
-- Content-Type: `image/jpeg`, `image/png`, `image/webp`, `image/svg+xml`
+- Content-Type: `image/jpeg`, `image/png`, `image/webp`, or `image/svg+xml`
 - Body: raw binary bytes
 - File limit: `5MB`
 
-현재 구현은 실제 포맷을 magic bytes로 판별합니다. Content-Type은 읽지만 포맷 판별 자체는 파일 바이트 기준입니다.
+The current implementation detects the actual image format from magic bytes. The `Content-Type` header is read, but format detection is based on file bytes.
 
 #### Supported Formats
 
@@ -564,11 +720,11 @@ curl -X POST "{BASE_URL}/metadata/image" \
 
 ---
 
-## 9. 메타데이터 업로드
+## 9. Upload Metadata
 
 ### `POST /metadata/metadata`
 
-이미지 업로드 결과를 사용해 토큰 메타데이터 JSON을 R2와 DB에 저장합니다.
+Stores token metadata JSON in R2 and the database. This endpoint must be called after `/metadata/image`.
 
 #### Request
 
@@ -588,15 +744,15 @@ curl -X POST "{BASE_URL}/metadata/image" \
 
 | Field | Required | Rule |
 |---|---:|---|
-| `image_uri` | Yes | `ALLOWED_IMAGE_DOMAIN`으로 시작. 기본 `https://storage.nadapp.net/` |
-| `name` | Yes | trim 후 1-32자, 줄바꿈 불가 |
-| `symbol` | Yes | 1-10자, ASCII alphanumeric only |
-| `description` | No | 최대 500자 |
-| `website` | No | 값이 있으면 `https://`로 시작 |
-| `twitter` | No | 값이 있으면 `https://x.com/`로 시작 |
-| `telegram` | No | 값이 있으면 `https://t.me/`로 시작 |
+| `image_uri` | Yes | Must start with `ALLOWED_IMAGE_DOMAIN`. Default: `https://storage.nadapp.net/` |
+| `name` | Yes | Trimmed length 1-32, no newlines |
+| `symbol` | Yes | 1-10 characters, ASCII alphanumeric only |
+| `description` | No | Maximum 500 characters |
+| `website` | No | If present, must start with `https://` |
+| `twitter` | No | If present, must start with `https://x.com/` |
+| `telegram` | No | If present, must start with `https://t.me/` |
 
-중요: `image_uri`의 NSFW 결과는 이미지 업로드 후 Redis에 캐시됩니다. 캐시가 만료되면 메타데이터 업로드가 실패하므로 이미지 업로드 직후 호출해야 합니다.
+Important: the NSFW result for `image_uri` is cached in Redis after image upload. If the cache expires, metadata upload fails. Call this endpoint soon after uploading the image.
 
 #### Success `200`
 
@@ -618,11 +774,11 @@ curl -X POST "{BASE_URL}/metadata/image" \
 
 ---
 
-## 10. Salt 마이닝
+## 10. Mine Salt
 
 ### `POST /token/salt`
 
-v2 token clone 주소가 특정 suffix로 끝나도록 `bytes32 salt`를 찾습니다.
+Mines a `bytes32` salt so that the v2 token clone address ends with the configured vanity suffix.
 
 #### Request
 
@@ -640,9 +796,9 @@ v2 token clone 주소가 특정 suffix로 끝나도록 `bytes32 salt`를 찾습�
 | Field | Required | Rule |
 |---|---:|---|
 | `creator` | Yes | EVM address |
-| `name` | Yes | 1-32자, 줄바꿈 불가 |
-| `symbol` | Yes | 1-10자, alphanumeric |
-| `metadata_uri` | Yes | `ALLOWED_IMAGE_DOMAIN`으로 시작 |
+| `name` | Yes | 1-32 characters, no newlines |
+| `symbol` | Yes | 1-10 characters, alphanumeric |
+| `metadata_uri` | Yes | Must start with `ALLOWED_IMAGE_DOMAIN` |
 
 #### Success `200`
 
@@ -653,27 +809,27 @@ v2 token clone 주소가 특정 suffix로 끝나도록 `bytes32 salt`를 찾습�
 }
 ```
 
-#### 구현 기준
+#### Implementation Notes
 
-- API 서버 환경변수:
-  - `BONDING_CURVE`: CREATE2 deployer로 사용
-  - `TOKEN_IMPLEMENT`: EIP-1167 clone implementation 주소
-  - `VANITY_ADDRESS_SUFFIX`: 원하는 hex suffix. 현재 환경 예시는 `7777`
-- 최대 반복 횟수: `10,000,000`
-- 병렬 탐색 chunk size: `10,000`
-- CREATE2 주소는 EIP-1167 minimal proxy init code 기준으로 계산됩니다.
-- 마이닝 시작 salt에는 요청값과 랜덤 UUID가 섞입니다. 따라서 같은 입력으로 호출해도 API가 매번 같은 salt를 반환한다는 보장은 없습니다.
-- 반환된 `salt` 자체와 컨트랙트 deployer/implementation이 같으면 결과 주소는 deterministic입니다.
+- API server environment variables:
+  - `BONDING_CURVE`: CREATE2 deployer address
+  - `TOKEN_IMPLEMENT`: EIP-1167 clone implementation address
+  - `VANITY_ADDRESS_SUFFIX`: desired hex suffix. Current environment example: `7777`
+- Maximum iterations: `10,000,000`
+- Parallel mining chunk size: `10,000`
+- CREATE2 address calculation uses EIP-1167 minimal proxy init code.
+- The starting salt includes request values and a random UUID. The API does not guarantee the same salt for repeated calls with identical input.
+- The returned `salt` produces a deterministic address when the deployer and implementation are unchanged.
 
 ---
 
-## 11. v2 컨트랙트 생성 연동
+## 11. v2 Contract Token Creation
 
-기존 문서의 `BondingCurveRouter.TokenCreationParams` / `amountOut` / `actionId` 방식은 v2에서 사용하지 않습니다. v2는 `NadFunRouter`가 단일 user-facing router입니다.
+The old `BondingCurveRouter.TokenCreationParams`, `amountOut`, and `actionId` flow is not used in v2. v2 uses `NadFunRouter` as the single user-facing router.
 
-### 주요 배포 주소
+### Deployment Addresses
 
-`nadfun-contract-v2/deploy.md` 기준:
+Based on `nadfun-contract-v2/deploy.md`:
 
 | Name | Address |
 |---|---|
@@ -688,7 +844,7 @@ v2 token clone 주소가 특정 suffix로 끝나도록 `bytes32 salt`를 찾습�
 | `V2_LP_VAULT` | `0x2acD9C75fe16c909237D9e6f080210D26c8c956D` |
 | `V2_GIFT_VAULT` | `0xC112EB5C40FC9A22425300D232A31d00FF840ad0` |
 
-환경별 주소가 다를 수 있으므로 production integration에서는 최신 배포 주소를 별도 확인해야 합니다.
+Addresses can differ by environment. Confirm the latest production addresses before using them in production.
 
 ### `INadFunRouter.CreateParams`
 
@@ -707,14 +863,14 @@ struct CreateParams {
 }
 ```
 
-필드 주의사항:
+Field notes:
 
 | Field | Notes |
 |---|---|
-| `quoteToken` | `ProtocolManager`에 등록된 quote token이어야 합니다. 예: WMON, LVMON |
-| `creatorFeeRate` | BPS 단위입니다. 기본 allowlist는 1%, 3%, 5%에 해당하는 `100`, `300`, `500`입니다. |
-| `buyQuoteAmount` | 초기 매수에 사용할 quote token 수량입니다. 초기 매수가 없으면 `0` |
-| `deadline` | 만료 Unix timestamp입니다. `deadline < block.timestamp`이면 revert |
+| `quoteToken` | Must be registered in `ProtocolManager`. Examples: WMON, LVMON |
+| `creatorFeeRate` | BPS. Default allowlist is `100`, `300`, `500`, representing 1%, 3%, 5% |
+| `buyQuoteAmount` | Quote token amount used for the optional initial buy. Use `0` for no initial buy |
+| `deadline` | Expiration Unix timestamp. Reverts if `deadline < block.timestamp` |
 
 ### `IBondingCurve.VaultAllocation`
 
@@ -726,9 +882,9 @@ struct VaultAllocation {
 }
 ```
 
-- `bps` 합계는 `10000`이어야 합니다.
-- 최대 5개 vault를 사용할 수 있습니다.
-- creator fee를 단순 수령 주소로 보내려면 `CreatorFeeVault`를 쓰고 `setupData = abi.encode(recipient)`를 전달합니다.
+- The total `bps` across vaults must be `10000`.
+- Up to 5 vaults can be used.
+- To send creator fees directly to a recipient, use `CreatorFeeVault` and set `setupData = abi.encode(recipient)`.
 
 ### `ITokenRegistry.DexType`
 
@@ -740,9 +896,9 @@ enum DexType {
 }
 ```
 
-현재 v2 NadFun pair 경로는 `UniswapV2` 타입을 사용합니다.
+The current Nad.fun v2 pair path uses `UniswapV2`.
 
-### 생성 함수
+### Creation Functions
 
 ```solidity
 function create(CreateParams calldata params)
@@ -757,7 +913,7 @@ function createWithNative(CreateParams calldata params)
 
 ### No Initial Buy
 
-`buyQuoteAmount = 0`으로 생성합니다. 이 경우 creator는 초기 매수 토큰을 받지 않고 `tokenOut = 0`입니다.
+Set `buyQuoteAmount = 0`. The creator receives no initial buy tokens and `tokenOut = 0`.
 
 ```solidity
 uint256 deployFee = protocolManager.deployFee(WMON);
@@ -789,7 +945,7 @@ INadFunRouter.CreateParams memory params = INadFunRouter.CreateParams({
 
 ### Initial Buy
 
-`buyQuoteAmount`에 초기 매수에 사용할 quote token 수량을 넣습니다. v2에서는 `amountOut`을 클라이언트가 직접 계산해 넣지 않습니다. 라우터/본딩커브가 `tokenOut`을 계산해 반환합니다.
+Set `buyQuoteAmount` to the quote token amount to spend on the initial buy. In v2, clients do not calculate and pass `amountOut` during creation. The router and bonding curve calculate `tokenOut` and return it.
 
 ```solidity
 uint256 buyQuoteAmount = 1 ether;
@@ -814,9 +970,9 @@ INadFunRouter.CreateParams memory params = INadFunRouter.CreateParams({
 (address token, uint256 tokenOut) = nadFunRouter.create(params);
 ```
 
-### Native MON으로 생성
+### Create with Native MON
 
-`quoteToken`이 WMON 또는 LVMON이고 native MON을 사용하려면 `createWithNative`를 호출합니다.
+Use `createWithNative` when `quoteToken` is WMON or LVMON and the user wants to fund creation with native MON.
 
 ```solidity
 uint256 buyQuoteAmount = 1 ether;
@@ -840,22 +996,22 @@ INadFunRouter.CreateParams memory params = INadFunRouter.CreateParams({
     nadFunRouter.createWithNative{value: totalRequired}(params);
 ```
 
-### v2 변경 요약
+### v2 Changes Summary
 
-| 기존 방식 | v2 방식 |
+| Old flow | v2 flow |
 |---|---|
-| `BondingCurveRouter` / `DexRouter` | `NadFunRouter` 단일 라우터 |
-| `amountOut`을 생성 파라미터로 입력 | `buyQuoteAmount` 입력, `tokenOut` 반환 |
-| `actionId` | 제거 |
-| 단일 native quote 가정 | `quoteToken` 파라미터로 multi quote 지원 |
-| creator fee 로직이 token transfer에 내장 | plain ERC20 + `FeeCollector` + vault distribution |
-| DEX 졸업 후 외부 router 의존 | `NadFunPair` + `NadSwapAdapter` 경로 |
+| `BondingCurveRouter` and `DexRouter` | Single `NadFunRouter` |
+| Pass `amountOut` during token creation | Pass `buyQuoteAmount`; receive `tokenOut` |
+| `actionId` | Removed |
+| Single native quote assumption | `quoteToken` parameter supports multiple quote assets |
+| Creator fee embedded in token transfer behavior | Plain ERC20 plus `FeeCollector` and vault distribution |
+| Post-graduation external router dependency | `NadFunPair` plus `NadSwapAdapter` |
 
 ---
 
-## 12. v2 거래 컨트랙트 참고
+## 12. v2 Contract Trading Reference
 
-`NadFunRouter`는 토큰의 lifecycle에 따라 자동 라우팅합니다.
+`NadFunRouter` automatically routes by token lifecycle phase.
 
 ```solidity
 function buy(BuyParams calldata params) external returns (uint256 amountOut);
@@ -873,7 +1029,7 @@ function exactOutSell(ExactOutSellParams calldata params) external returns (uint
 function exactOutSellToNative(ExactOutSellToNativeParams calldata params) external returns (uint256 amountOut);
 ```
 
-조회 함수:
+View functions:
 
 ```solidity
 function isGraduated(address token) external view returns (bool);
@@ -887,11 +1043,12 @@ function getDexAmountIn(address token, uint256 amountOut, bool isBuy) external v
 
 ---
 
-## 클라이언트 체크리스트
+## Client Checklist
 
-- `metadata.image_uri`가 아니라 업로드 API의 `image_uri`를 그대로 사용합니다.
-- `/metadata/metadata`의 `description`은 현재 API 타입상 nullable이지만, 제품 정책상 비어 있지 않게 보내는 것을 권장합니다.
-- `/token/salt` 결과의 `address`는 생성 전 예상 주소입니다. 최종 생성 후에는 트랜잭션 receipt와 API 인덱싱 결과를 함께 확인합니다.
-- v2 생성 시 `amountOut`을 파라미터로 넣지 않습니다. `buyQuoteAmount`만 넣고 `tokenOut` 반환값을 사용합니다.
-- 모든 금액/가격 문자열은 decimal로 파싱합니다.
-- strict enum parser를 쓰는 클라이언트는 향후 API가 `quote_*` / v2 market type 필드를 추가해도 깨지지 않게 unknown field와 enum 확장을 허용하는 구조를 권장합니다.
+- Use the `image_uri` returned by the upload API when creating metadata.
+- The current metadata request type allows `description` to be nullable, but product integrations should send a non-empty description.
+- API keys are created through wallet session authentication and the full key is returned only once.
+- The `address` returned by `/token/salt` is a predicted address before creation. After creation, verify the transaction receipt and indexed API data.
+- In v2 token creation, do not pass `amountOut`. Pass `buyQuoteAmount` and use the returned `tokenOut`.
+- Parse all price and amount strings with decimal-safe tooling.
+- Strict parsers should allow unknown fields and future enum extensions, because quote-specific API fields may be added later.
