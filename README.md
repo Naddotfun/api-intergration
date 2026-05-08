@@ -1,8 +1,8 @@
 # Nad.fun API Integration Guide
 
-This document describes the current Nad.fun API server integration surface and the Nad.fun v2 token creation contract flow.
+This document describes the Nad.fun v2 API integration surface and the Nad.fun v2 token creation contract flow.
 
-The API sections are based on the current `api-server` routes and serialized response types. The contract sections are based on `nadfun-contract-v2`, especially `INadFunRouter` and `NadFunRouter`.
+The API sections use the v2 response schema (`quote_*`, `version`, and `V2_*` market types). The contract sections are based on `nadfun-contract-v2`, especially `INadFunRouter` and `NadFunRouter`.
 
 ---
 
@@ -14,6 +14,8 @@ The API sections are based on the current `api-server` routes and serialized res
 | Testnet | `https://dev-api.nadapp.net` |
 
 All examples use `{BASE_URL}` as a placeholder for one of the URLs above.
+
+V2 data endpoints are shown with the `/v2` prefix. Shared upload and auth endpoints remain unversioned unless noted otherwise.
 
 ---
 
@@ -211,7 +213,7 @@ Deletes an API key owned by the authenticated session account.
 ### 5. Use API Key
 
 ```bash
-curl "{BASE_URL}/trade/market/0x1234567890abcdef1234567890abcdef12345678" \
+curl "{BASE_URL}/v2/trade/market/0x1234567890abcdef1234567890abcdef12345678" \
   -H "X-API-Key: nadfun_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
@@ -280,9 +282,9 @@ interface ApiKeyListResponse {
 
 1. Upload the token image with `POST /metadata/image`.
 2. Use the returned `image_uri` to upload token metadata with `POST /metadata/metadata`.
-3. Use the returned `metadata_uri` to mine a vanity salt with `POST /token/salt`.
+3. Use the returned `metadata_uri` to mine a vanity salt with `POST /v2/token/salt`.
 4. Call the v2 contract `NadFunRouter.create()` or `NadFunRouter.createWithNative()`.
-5. After the creation transaction is indexed, query the token through `/token/:token`, `/token/metadata/:token_id`, and `/trade/*`.
+5. After the creation transaction is indexed, query the token through `/v2/token/:token`, `/v2/token/metadata/:token_id`, and `/v2/trade/*`.
 
 ---
 
@@ -301,9 +303,11 @@ interface AccountInfo {
 
 ### `TokenInfo`
 
-Current public API shape for `token_info`.
+V2 API shape for `token_info`.
 
 ```ts
+type TokenVersion = "V1" | "V2";
+
 interface TokenInfo {
   token_id: string;
   name: string;
@@ -318,6 +322,7 @@ interface TokenInfo {
   created_at: number;
   creator: AccountInfo;
   is_cto: boolean;
+  version: TokenVersion;
 }
 ```
 
@@ -338,22 +343,26 @@ If the creator has connected X, `creator.nickname` and `creator.image_uri` prefe
 | `created_at` | number | Creation Unix timestamp in seconds |
 | `creator` | AccountInfo | Creator account information |
 | `is_cto` | boolean | CTO status flag |
+| `version` | `"V1"` or `"V2"` | Token version. V2 tokens support multi-quote markets |
 
 ### `MarketInfo`
 
-Current public API shape for `market_info`.
+V2 API shape for `market_info`.
 
 ```ts
-type MarketType = "CURVE" | "DEX";
+type MarketType = "CURVE" | "DEX" | "V2_CURVE" | "V2_DEX";
 
 interface MarketInfo {
   market_type: MarketType;
   token_id: string;
+  quote_id: string;
   market_id: string;
   reserve_native: string;
+  reserve_quote: string;
   reserve_token: string;
   token_price: string;
   native_price: string;
+  quote_price: string;
   price: string;
   price_usd: string;
   price_native: string;
@@ -368,21 +377,24 @@ interface MarketInfo {
 
 | Field | Type | Description |
 |---|---|---|
-| `market_type` | `"CURVE"` or `"DEX"` | Current market type |
+| `market_type` | `"CURVE"`, `"DEX"`, `"V2_CURVE"`, or `"V2_DEX"` | Current market type |
 | `token_id` | string | Token contract address |
+| `quote_id` | string | Quote asset address. V1 tokens use WMON |
 | `market_id` | string | Curve or DEX pool address |
-| `reserve_native` | string | Native MON reserve |
+| `reserve_native` | string | Legacy reserve field. For V1 it is MON reserve; for V2 it mirrors quote reserve |
+| `reserve_quote` | string | Quote asset reserve |
 | `reserve_token` | string | Project token reserve |
-| `token_price` | string | Token price in USD. Same value as `price_usd` in the current API |
-| `native_price` | string | Native MON price in USD |
-| `price` | string | Token price in native MON |
+| `token_price` | string | Token price in USD. Same value as `price_usd` in the V2 schema |
+| `native_price` | string | Legacy price field. For V1 it is MON/USD; for V2 use `quote_price` |
+| `quote_price` | string | Quote asset price in USD |
+| `price` | string | Token price in quote asset |
 | `price_usd` | string | Token price in USD |
-| `price_native` | string | Token price in native MON. Same value as `price` |
+| `price_native` | string | Legacy native price field. For V1 it matches `price`; for V2 use `price` with `quote_id` |
 | `total_supply` | string | Total token supply |
 | `volume` | string | Cumulative trading volume |
-| `ath_price` | string | All-time high price in USD. Same value as `ath_price_usd` in the current API |
+| `ath_price` | string | All-time high price in USD. Same value as `ath_price_usd` in the V2 schema |
 | `ath_price_usd` | string | All-time high price in USD |
-| `ath_price_native` | string | All-time high price in native MON |
+| `ath_price_native` | string | Legacy native ATH field. For V2, prefer quote-aware fields when available |
 | `holder_count` | number | Token holder count |
 
 ### Token and Market Response Types
@@ -410,8 +422,10 @@ type SwapType = "BUY" | "SELL";
 interface SwapInfo {
   event_type: SwapType;
   native_amount: string;
+  quote_amount: string;
   token_amount: string;
   native_price: string;
+  quote_price: string;
   value: string;
   transaction_hash: string;
   created_at: number;
@@ -421,9 +435,11 @@ interface SwapInfo {
 | Field | Type | Description |
 |---|---|---|
 | `event_type` | `"BUY"` or `"SELL"` | Swap direction |
-| `native_amount` | string | Native MON amount |
+| `native_amount` | string | Legacy amount field. For V1 it is MON amount; for V2 it mirrors quote amount |
+| `quote_amount` | string | Quote asset amount used in the swap |
 | `token_amount` | string | Project token amount |
-| `native_price` | string | Native MON price in USD at response calculation time |
+| `native_price` | string | Legacy price field. For V1 it is MON/USD; for V2 use `quote_price` |
+| `quote_price` | string | Quote asset price in USD at execution time |
 | `value` | string | Swap value in USD at execution time |
 | `transaction_hash` | string | Transaction hash |
 | `created_at` | number | Swap Unix timestamp in seconds |
@@ -443,7 +459,7 @@ interface BalanceInfo {
 |---|---|---|
 | `balance` | string | Token balance |
 | `token_price` | string | Token price in USD |
-| `native_price` | string | Native MON price in USD |
+| `native_price` | string | Legacy native price field |
 | `created_at` | number | Balance row creation Unix timestamp in seconds |
 
 ### Trading Response Types
@@ -544,7 +560,7 @@ interface MineSaltResponse {
 
 ## 1. Get Token Info
 
-### `GET /token/:token`
+### `GET /v2/token/:token`
 
 Returns token metadata and creator information.
 
@@ -576,7 +592,8 @@ Returns token metadata and creator information.
       "bio": "Creator bio",
       "image_uri": "https://storage.nadapp.net/profile/uuid"
     },
-    "is_cto": false
+    "is_cto": false,
+    "version": "V2"
   }
 }
 ```
@@ -585,7 +602,7 @@ Returns token metadata and creator information.
 
 ## 2. Get Token Metadata and Market
 
-### `GET /token/metadata/:token_id`
+### `GET /v2/token/metadata/:token_id`
 
 Returns token metadata and current market data in one response.
 
@@ -617,16 +634,20 @@ Returns token metadata and current market data in one response.
       "bio": "Creator bio",
       "image_uri": "https://storage.nadapp.net/profile/uuid"
     },
-    "is_cto": false
+    "is_cto": false,
+    "version": "V2"
   },
   "market_info": {
-    "market_type": "CURVE",
+    "market_type": "V2_CURVE",
     "token_id": "0x1234567890abcdef1234567890abcdef12345678",
+    "quote_id": "0x5a4E0bFDeF88C9032CB4d24338C5EB3d3870BfDd",
     "market_id": "0x27063a38eC0D3281D354090EB92e669Ed1eB956C",
     "reserve_native": "12345.67",
+    "reserve_quote": "12345.67",
     "reserve_token": "987654321.0",
     "token_price": "0.00000028",
     "native_price": "1.25",
+    "quote_price": "1.25",
     "price": "0.000000224",
     "price_usd": "0.00000028",
     "price_native": "0.000000224",
@@ -644,7 +665,7 @@ Returns token metadata and current market data in one response.
 
 ## 3. Get Market Data
 
-### `GET /trade/market/:token_id`
+### `GET /v2/trade/market/:token_id`
 
 Returns current market state, price, reserves, volume, and holder count.
 
@@ -659,13 +680,16 @@ Returns current market state, price, reserves, volume, and holder count.
 ```json
 {
   "market_info": {
-    "market_type": "CURVE",
+    "market_type": "V2_CURVE",
     "token_id": "0x1234567890abcdef1234567890abcdef12345678",
+    "quote_id": "0x5a4E0bFDeF88C9032CB4d24338C5EB3d3870BfDd",
     "market_id": "0x27063a38eC0D3281D354090EB92e669Ed1eB956C",
     "reserve_native": "12345.67",
+    "reserve_quote": "12345.67",
     "reserve_token": "987654321.0",
     "token_price": "0.00000028",
     "native_price": "1.25",
+    "quote_price": "1.25",
     "price": "0.000000224",
     "price_usd": "0.00000028",
     "price_native": "0.000000224",
@@ -683,7 +707,7 @@ Returns current market state, price, reserves, volume, and holder count.
 
 ## 4. Get Chart Data
 
-### `GET /trade/chart/:token_id`
+### `GET /v2/trade/chart/:token_id`
 
 Returns OHLCV candlestick data.
 
@@ -707,9 +731,9 @@ Returns OHLCV candlestick data.
 
 | Value | Description |
 |---|---|
-| `price` | Token price in native MON |
+| `price` | Token price in quote asset |
 | `price_usd` | Token price in USD |
-| `market_cap` | Market cap in native MON |
+| `market_cap` | Market cap in quote asset |
 | `market_cap_usd` | Market cap in USD |
 
 #### Success `200`
@@ -746,7 +770,7 @@ Returns OHLCV candlestick data.
 
 ## 5. Get Trading Metrics
 
-### `GET /trade/metrics/:token_id`
+### `GET /v2/trade/metrics/:token_id`
 
 Returns transaction counts, volume, maker counts, and price-change percentage for multiple timeframes.
 
@@ -793,14 +817,14 @@ Returns transaction counts, volume, maker counts, and price-change percentage fo
 #### Example
 
 ```bash
-curl "{BASE_URL}/trade/metrics/0x1234567890abcdef1234567890abcdef12345678?timeframes=1,5,15,30,60,240,1D"
+curl "{BASE_URL}/v2/trade/metrics/0x1234567890abcdef1234567890abcdef12345678?timeframes=1,5,15,30,60,240,1D"
 ```
 
 ---
 
 ## 6. Get Swap History
 
-### `GET /trade/swap-history/:token_id`
+### `GET /v2/trade/swap-history/:token_id`
 
 Returns paginated token swap history.
 
@@ -836,8 +860,10 @@ Returns paginated token swap history.
       "swap_info": {
         "event_type": "BUY",
         "native_amount": "1000000000000000000",
+        "quote_amount": "1000000000000000000",
         "token_amount": "500000000000000000000",
         "native_price": "1.25",
+        "quote_price": "1.25",
         "value": "1.25",
         "transaction_hash": "0x...",
         "created_at": 1754927984
@@ -852,7 +878,7 @@ Returns paginated token swap history.
 
 ## 7. Get Holders
 
-### `GET /trade/holder/:token_id`
+### `GET /v2/trade/holder/:token_id`
 
 Returns a paginated token holder list.
 
@@ -994,7 +1020,7 @@ Important: the NSFW result for `image_uri` is cached in Redis after image upload
 
 ## 10. Mine Salt
 
-### `POST /token/salt`
+### `POST /v2/token/salt`
 
 Mines a `bytes32` salt so that the v2 token clone address ends with the configured vanity suffix.
 
@@ -1268,7 +1294,7 @@ function getDexAmountIn(address token, uint256 amountOut, bool isBuy) external v
 - Use the `image_uri` returned by the upload API when creating metadata.
 - The current metadata request type allows `description` to be nullable, but product integrations should send a non-empty description.
 - API keys are created through wallet session authentication and the full key is returned only once.
-- The `address` returned by `/token/salt` is a predicted address before creation. After creation, verify the transaction receipt and indexed API data.
+- The `address` returned by `/v2/token/salt` is a predicted address before creation. After creation, verify the transaction receipt and indexed API data.
 - In v2 token creation, do not pass `amountOut`. Pass `buyQuoteAmount` and use the returned `tokenOut`.
 - Parse all price and amount strings with decimal-safe tooling.
-- Strict parsers should allow unknown fields and future enum extensions because the API may add fields later.
+- Strict parsers must handle v2 fields such as `quote_id`, `reserve_quote`, `quote_price`, `quote_amount`, `version`, `V2_CURVE`, and `V2_DEX`.
