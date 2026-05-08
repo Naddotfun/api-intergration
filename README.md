@@ -11,7 +11,7 @@ The API sections are based on the current `api-server` routes and serialized res
 | Network | Base URL |
 |---|---|
 | Mainnet | `https://api.nad.fun` |
-| Testnet | `https://dev-api.nad.fun` |
+| Testnet | `https://dev-api.nadapp.net` |
 
 All examples use `{BASE_URL}` as a placeholder for one of the URLs above.
 
