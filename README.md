@@ -217,6 +217,63 @@ curl "{BASE_URL}/trade/market/0x1234567890abcdef1234567890abcdef12345678" \
 
 When the key is invalid, expired, inactive, or malformed, the API returns `401`.
 
+### Auth and API Key Types
+
+```ts
+interface AuthNonceRequest {
+  address: string;
+}
+
+interface AuthNonceResponse {
+  nonce: string;
+}
+
+interface AuthSessionRequest {
+  signature: string;
+  nonce: string;
+  chain_id: number;
+  wallet_address?: string | null;
+}
+
+interface AuthSessionResponse {
+  account_info: AccountInfo;
+}
+
+interface CreateApiKeyRequest {
+  name: string;
+  description?: string | null;
+  owner_address?: string | null;
+  expires_in_days?: number | null;
+}
+
+interface CreateApiKeyResponse {
+  id: number;
+  api_key: string;
+  key_prefix: string;
+  name: string;
+}
+
+interface ApiKeyInfo {
+  id: number;
+  key_prefix: string;
+  name: string;
+  description: string | null;
+  owner_address: string | null;
+  is_active: boolean;
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  request_count: number;
+}
+
+interface ApiKeyListResponse {
+  api_keys: ApiKeyInfo[];
+  total: number;
+}
+```
+
+`owner_address` is accepted by the server-side request type, but API key creation overwrites it with the authenticated session address.
+
 ---
 
 ## Token Creation Flow
@@ -244,7 +301,7 @@ interface AccountInfo {
 
 ### `TokenInfo`
 
-This is the current API shape for `token_info`.
+Current public API shape for `token_info`.
 
 ```ts
 interface TokenInfo {
@@ -261,7 +318,6 @@ interface TokenInfo {
   created_at: number;
   creator: AccountInfo;
   is_cto: boolean;
-  hackathon_info?: HackathonInfo | null;
 }
 ```
 
@@ -282,11 +338,10 @@ If the creator has connected X, `creator.nickname` and `creator.image_uri` prefe
 | `created_at` | number | Creation Unix timestamp in seconds |
 | `creator` | AccountInfo | Creator account information |
 | `is_cto` | boolean | CTO status flag |
-| `hackathon_info` | HackathonInfo or null | Hackathon registration info, when available on `/token/:token` |
 
 ### `MarketInfo`
 
-This is the current API shape for `market_info`.
+Current public API shape for `market_info`.
 
 ```ts
 type MarketType = "CURVE" | "DEX";
@@ -316,21 +371,182 @@ interface MarketInfo {
 | `market_type` | `"CURVE"` or `"DEX"` | Current market type |
 | `token_id` | string | Token contract address |
 | `market_id` | string | Curve or DEX pool address |
-| `reserve_native` | string | Backward-compatible quote/native reserve field |
+| `reserve_native` | string | Native MON reserve |
 | `reserve_token` | string | Project token reserve |
-| `token_price` | string | Token price in USD |
-| `native_price` | string | Backward-compatible quote/native USD price field |
-| `price` | string | Token price in quote/native asset |
+| `token_price` | string | Token price in USD. Same value as `price_usd` in the current API |
+| `native_price` | string | Native MON price in USD |
+| `price` | string | Token price in native MON |
 | `price_usd` | string | Token price in USD |
-| `price_native` | string | Backward-compatible alias for `price` |
+| `price_native` | string | Token price in native MON. Same value as `price` |
 | `total_supply` | string | Total token supply |
 | `volume` | string | Cumulative trading volume |
-| `ath_price` | string | Current API ATH field. It is USD-denominated in current queries |
+| `ath_price` | string | All-time high price in USD. Same value as `ath_price_usd` in the current API |
 | `ath_price_usd` | string | All-time high price in USD |
-| `ath_price_native` | string | All-time high price in quote/native asset |
+| `ath_price_native` | string | All-time high price in native MON |
 | `holder_count` | number | Token holder count |
 
-Note: Nad.fun v2 contracts support multiple quote assets. The current API response type does not serialize `quote_id`, `reserve_quote`, `quote_price`, or `version`. The current API also serializes `market_type` as `CURVE` or `DEX`.
+### Token and Market Response Types
+
+```ts
+interface TokenResponse {
+  token_info: TokenInfo;
+}
+
+interface TokenMetadataResponse {
+  token_info: TokenInfo;
+  market_info: MarketInfo;
+}
+
+interface MarketResponse {
+  market_info: MarketInfo;
+}
+```
+
+### `SwapInfo`
+
+```ts
+type SwapType = "BUY" | "SELL";
+
+interface SwapInfo {
+  event_type: SwapType;
+  native_amount: string;
+  token_amount: string;
+  native_price: string;
+  value: string;
+  transaction_hash: string;
+  created_at: number;
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event_type` | `"BUY"` or `"SELL"` | Swap direction |
+| `native_amount` | string | Native MON amount |
+| `token_amount` | string | Project token amount |
+| `native_price` | string | Native MON price in USD at response calculation time |
+| `value` | string | Swap value in USD at execution time |
+| `transaction_hash` | string | Transaction hash |
+| `created_at` | number | Swap Unix timestamp in seconds |
+
+### `BalanceInfo`
+
+```ts
+interface BalanceInfo {
+  balance: string;
+  token_price: string;
+  native_price: string;
+  created_at: number;
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `balance` | string | Token balance |
+| `token_price` | string | Token price in USD |
+| `native_price` | string | Native MON price in USD |
+| `created_at` | number | Balance row creation Unix timestamp in seconds |
+
+### Trading Response Types
+
+```ts
+interface TokenSwap {
+  account_info: AccountInfo;
+  swap_info: SwapInfo;
+}
+
+interface TokenSwapResponse {
+  swaps: TokenSwap[];
+  total_count: number;
+}
+
+interface TokenHolder {
+  account_info: AccountInfo;
+  balance_info: BalanceInfo;
+}
+
+interface TokenHolderResponse {
+  holders: TokenHolder[];
+  total_count: number;
+}
+
+type ChartType = "price" | "price_usd" | "market_cap" | "market_cap_usd";
+type BarStatus = "ok" | "no_data" | "error";
+
+interface BarResponse {
+  k: ChartType;
+  t: number[];
+  c: string[];
+  o: string[];
+  h: string[];
+  l: string[];
+  v: string[];
+  s: BarStatus;
+}
+
+interface MetricItem {
+  timeframe: "1" | "5" | "15" | "30" | "60" | "240" | "1D";
+  percent: number;
+  transactions: { buy: number; sell: number; total: number };
+  volume: { buy: string; sell: string; total: string };
+  makers: { buy: number; sell: number; total: number };
+}
+
+interface MetricsBatchResponse {
+  metrics: MetricItem[];
+}
+```
+
+### Upload and Salt Types
+
+```ts
+interface UploadImageResponse {
+  is_nsfw: boolean;
+  image_uri: string;
+}
+
+interface UploadMetadataRequest {
+  image_uri: string;
+  name: string;
+  symbol: string;
+  description?: string | null;
+  website?: string | null;
+  twitter?: string | null;
+  telegram?: string | null;
+}
+
+interface TokenMetadata {
+  name: string;
+  symbol: string;
+  description: string | null;
+  image_uri: string;
+  website: string | null;
+  twitter: string | null;
+  telegram: string | null;
+  is_nsfw: boolean;
+}
+
+interface UploadMetadataResponse {
+  metadata_uri: string;
+  metadata: TokenMetadata;
+}
+
+interface MineSaltRequest {
+  creator: string;
+  name: string;
+  symbol: string;
+  metadata_uri: string;
+}
+
+interface MineSaltResponse {
+  salt: string;
+  address: string;
+}
+
+interface MineSaltError {
+  error: string;
+  iterations_attempted?: number;
+}
+```
 
 ---
 
@@ -368,8 +584,7 @@ Returns token metadata and creator information.
       "bio": "Creator bio",
       "image_uri": "https://storage.nadapp.net/profile/uuid"
     },
-    "is_cto": false,
-    "hackathon_info": null
+    "is_cto": false
   }
 }
 ```
@@ -410,8 +625,7 @@ Returns token metadata and current market data in one response.
       "bio": "Creator bio",
       "image_uri": "https://storage.nadapp.net/profile/uuid"
     },
-    "is_cto": false,
-    "hackathon_info": null
+    "is_cto": false
   },
   "market_info": {
     "market_type": "CURVE",
@@ -501,9 +715,9 @@ Returns OHLCV candlestick data.
 
 | Value | Description |
 |---|---|
-| `price` | Token price in quote/native asset |
+| `price` | Token price in native MON |
 | `price_usd` | Token price in USD |
-| `market_cap` | Market cap in quote/native asset |
+| `market_cap` | Market cap in native MON |
 | `market_cap_usd` | Market cap in USD |
 
 #### Success `200`
@@ -598,6 +812,12 @@ curl "{BASE_URL}/trade/metrics/0x1234567890abcdef1234567890abcdef12345678?timefr
 
 Returns paginated token swap history.
 
+#### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---:|---|
+| `token_id` | string | Yes | Token contract address |
+
 #### Query Parameters
 
 | Name | Type | Required | Default | Description |
@@ -605,7 +825,7 @@ Returns paginated token swap history.
 | `page` | integer | No | `1` | Minimum `1` |
 | `limit` | integer | No | `10` | Range: `1..100` |
 | `direction` | string | No | `DESC` | `ASC` or `DESC` |
-| `volume_ranges` | string | No | - | `small`, `medium`, `large`, comma-separated |
+| `volume_ranges` | string | No | - | `small` (`$0-$1000`), `medium` (`$1000-$10000`), `large` (`$10000+`), comma-separated |
 | `account_id` | string | No | - | Filter swaps by account |
 | `trade_type` | string | No | `ALL` | `BUY`, `SELL`, or `ALL` |
 
@@ -643,6 +863,12 @@ Returns paginated token swap history.
 ### `GET /trade/holder/:token_id`
 
 Returns a paginated token holder list.
+
+#### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---:|---|
+| `token_id` | string | Yes | Token contract address |
 
 #### Query Parameters
 
@@ -1051,4 +1277,4 @@ function getDexAmountIn(address token, uint256 amountOut, bool isBuy) external v
 - The `address` returned by `/token/salt` is a predicted address before creation. After creation, verify the transaction receipt and indexed API data.
 - In v2 token creation, do not pass `amountOut`. Pass `buyQuoteAmount` and use the returned `tokenOut`.
 - Parse all price and amount strings with decimal-safe tooling.
-- Strict parsers should allow unknown fields and future enum extensions, because quote-specific API fields may be added later.
+- Strict parsers should allow unknown fields and future enum extensions because the API may add fields later.
