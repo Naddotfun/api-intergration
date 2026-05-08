@@ -469,22 +469,19 @@ interface TokenHolderResponse {
   total_count: number;
 }
 
-type ChartType = "price" | "price_usd" | "market_cap" | "market_cap_usd";
-type BarStatus = "ok" | "no_data" | "error";
-
 interface BarResponse {
-  k: ChartType;
+  k: string;
   t: number[];
   c: string[];
   o: string[];
   h: string[];
   l: string[];
   v: string[];
-  s: BarStatus;
+  s: string;
 }
 
 interface MetricItem {
-  timeframe: "1" | "5" | "15" | "30" | "60" | "240" | "1D";
+  timeframe: string;
   percent: number;
   transactions: { buy: number; sell: number; total: number };
   volume: { buy: string; sell: string; total: string };
@@ -540,11 +537,6 @@ interface MineSaltRequest {
 interface MineSaltResponse {
   salt: string;
   address: string;
-}
-
-interface MineSaltError {
-  error: string;
-  iterations_attempted?: number;
 }
 ```
 
@@ -1034,6 +1026,8 @@ Mines a `bytes32` salt so that the v2 token clone address ends with the configur
   "address": "0x742d35Cc6634C0532925a3b844Bc9e7595f7777"
 }
 ```
+
+Failures use the common error format. The current runtime maps max-iteration failure to `500` with `{"error":"Internal server error"}`.
 
 #### Implementation Notes
 
