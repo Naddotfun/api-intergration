@@ -15,8 +15,6 @@ The API sections use the v2 response schema (`quote_*`, `version`, and `V2_*` ma
 
 All examples use `{BASE_URL}` as a placeholder for one of the URLs above.
 
-V2 data endpoints are shown with the `/v2` prefix. Shared upload and auth endpoints remain unversioned unless noted otherwise.
-
 ---
 
 ## Common Rules
@@ -213,7 +211,7 @@ Deletes an API key owned by the authenticated session account.
 ### 5. Use API Key
 
 ```bash
-curl "{BASE_URL}/v2/trade/market/0x1234567890abcdef1234567890abcdef12345678" \
+curl "{BASE_URL}/trade/market/0x1234567890abcdef1234567890abcdef12345678" \
   -H "X-API-Key: nadfun_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
@@ -282,9 +280,9 @@ interface ApiKeyListResponse {
 
 1. Upload the token image with `POST /metadata/image`.
 2. Use the returned `image_uri` to upload token metadata with `POST /metadata/metadata`.
-3. Use the returned `metadata_uri` to mine a vanity salt with `POST /v2/token/salt`.
+3. Use the returned `metadata_uri` to mine a vanity salt with `POST /token/salt`.
 4. Call the v2 contract `NadFunRouter.create()` or `NadFunRouter.createWithNative()`.
-5. After the creation transaction is indexed, query the token through `/v2/token/:token`, `/v2/token/metadata/:token_id`, and `/v2/trade/*`.
+5. After the creation transaction is indexed, query the token through `/token/:token`, `/token/metadata/:token_id`, and `/trade/*`.
 
 ---
 
@@ -560,7 +558,7 @@ interface MineSaltResponse {
 
 ## 1. Get Token Info
 
-### `GET /v2/token/:token`
+### `GET /token/:token`
 
 Returns token metadata and creator information.
 
@@ -602,7 +600,7 @@ Returns token metadata and creator information.
 
 ## 2. Get Token Metadata and Market
 
-### `GET /v2/token/metadata/:token_id`
+### `GET /token/metadata/:token_id`
 
 Returns token metadata and current market data in one response.
 
@@ -665,7 +663,7 @@ Returns token metadata and current market data in one response.
 
 ## 3. Get Market Data
 
-### `GET /v2/trade/market/:token_id`
+### `GET /trade/market/:token_id`
 
 Returns current market state, price, reserves, volume, and holder count.
 
@@ -707,7 +705,7 @@ Returns current market state, price, reserves, volume, and holder count.
 
 ## 4. Get Chart Data
 
-### `GET /v2/trade/chart/:token_id`
+### `GET /trade/chart/:token_id`
 
 Returns OHLCV candlestick data.
 
@@ -770,7 +768,7 @@ Returns OHLCV candlestick data.
 
 ## 5. Get Trading Metrics
 
-### `GET /v2/trade/metrics/:token_id`
+### `GET /trade/metrics/:token_id`
 
 Returns transaction counts, volume, maker counts, and price-change percentage for multiple timeframes.
 
@@ -817,14 +815,14 @@ Returns transaction counts, volume, maker counts, and price-change percentage fo
 #### Example
 
 ```bash
-curl "{BASE_URL}/v2/trade/metrics/0x1234567890abcdef1234567890abcdef12345678?timeframes=1,5,15,30,60,240,1D"
+curl "{BASE_URL}/trade/metrics/0x1234567890abcdef1234567890abcdef12345678?timeframes=1,5,15,30,60,240,1D"
 ```
 
 ---
 
 ## 6. Get Swap History
 
-### `GET /v2/trade/swap-history/:token_id`
+### `GET /trade/swap-history/:token_id`
 
 Returns paginated token swap history.
 
@@ -878,7 +876,7 @@ Returns paginated token swap history.
 
 ## 7. Get Holders
 
-### `GET /v2/trade/holder/:token_id`
+### `GET /trade/holder/:token_id`
 
 Returns a paginated token holder list.
 
@@ -1020,7 +1018,7 @@ Important: the NSFW result for `image_uri` is cached in Redis after image upload
 
 ## 10. Mine Salt
 
-### `POST /v2/token/salt`
+### `POST /token/salt`
 
 Mines a `bytes32` salt so that the v2 token clone address ends with the configured vanity suffix.
 
@@ -1294,7 +1292,7 @@ function getDexAmountIn(address token, uint256 amountOut, bool isBuy) external v
 - Use the `image_uri` returned by the upload API when creating metadata.
 - The current metadata request type allows `description` to be nullable, but product integrations should send a non-empty description.
 - API keys are created through wallet session authentication and the full key is returned only once.
-- The `address` returned by `/v2/token/salt` is a predicted address before creation. After creation, verify the transaction receipt and indexed API data.
+- The `address` returned by `/token/salt` is a predicted address before creation. After creation, verify the transaction receipt and indexed API data.
 - In v2 token creation, do not pass `amountOut`. Pass `buyQuoteAmount` and use the returned `tokenOut`.
 - Parse all price and amount strings with decimal-safe tooling.
 - Strict parsers must handle v2 fields such as `quote_id`, `reserve_quote`, `quote_price`, `quote_amount`, `version`, `V2_CURVE`, and `V2_DEX`.
