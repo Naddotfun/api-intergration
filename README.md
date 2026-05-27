@@ -546,6 +546,7 @@ interface MineSaltRequest {
   name: string;
   symbol: string;
   metadata_uri: string;
+  version?: TokenVersion;
 }
 
 interface MineSaltResponse {
@@ -1029,7 +1030,8 @@ Mines a `bytes32` salt so that the v2 token clone address ends with the configur
   "creator": "0x742d35Cc6634C0532925a3b844Bc9e7595f70143",
   "name": "My Token",
   "symbol": "MTK",
-  "metadata_uri": "https://storage.nadapp.net/metadata/94a412d2-b599-4bb0-b026-b14c4036c58c.json"
+  "metadata_uri": "https://storage.nadapp.net/metadata/94a412d2-b599-4bb0-b026-b14c4036c58c.json",
+  "version": "V2"
 }
 ```
 
@@ -1041,6 +1043,7 @@ Mines a `bytes32` salt so that the v2 token clone address ends with the configur
 | `name` | Yes | 1-32 characters, no newlines |
 | `symbol` | Yes | 1-10 characters, alphanumeric |
 | `metadata_uri` | Yes | Must start with `ALLOWED_IMAGE_DOMAIN` |
+| `version` | No | `"V1"` or `"V2"` (default `"V1"`) |
 
 #### Success `200`
 
